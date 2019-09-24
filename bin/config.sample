@@ -1,0 +1,6 @@
+# Name of the ldap server
+ldapserver=ldap.example.com
+# Domain name
+domain=example.com
+
+
