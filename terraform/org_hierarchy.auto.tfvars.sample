@@ -1,0 +1,8 @@
+/*
+* Set your organization hierarchy. This information will be used for cost tracking tags and set as tag default in users' compartments.
+*/
+org_hierarchy = [
+  "<your_org_level_1>",
+  "<your_org_level_2>",
+  "<your_org_level_3>"
+]

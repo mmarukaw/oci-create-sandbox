@@ -1,0 +1,10 @@
+// Modify these variables along with your tenancy information
+// Tenancy : XXXXX (test environment)
+
+tenancy_ocid     = "<your_tenancy_ocid>"
+compartment_ocid = "<your_compartment_ocid>"
+region           = "<your_region>"
+
+user_ocid        = "<your_user_ocid>"
+fingerprint      = "<your_api_key_fingerprint>"
+private_key_path = "<path_to_your_api_private_key>"
