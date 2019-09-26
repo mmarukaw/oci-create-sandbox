@@ -1,12 +1,24 @@
 // Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
 
-variable base_compartment_name {
+variable member_base_compartment_name {
   default = "member"
+}
+
+variable project_base_compartment_name {
+  default = "project"
 }
 
 variable users {
   type = list(object({
     name = string
+    org  = map(string)
+  }))
+}
+
+variable projects {
+  type = list(object({
+    name = string
+    owner = string
     org  = map(string)
   }))
 }
@@ -20,6 +32,13 @@ locals {
     for user in var.users : [
       for tagkey, tagvalue in user.org : [
         join("|", [lookup(user, "name"), tagkey])
+      ]
+    ]
+  ]
+  tagsbyprojects = [
+    for project in var.projects : [
+      for tagkey, tagvalue in project.org : [
+        join("|", [lookup(project, "name"), tagkey])
       ]
     ]
   ]
@@ -61,8 +80,15 @@ resource "oci_identity_tag" "org_hierarchy" {
 }
 
 resource "oci_identity_compartment" "base_compartment" {
-  name           = "${var.base_compartment_name}"
+  name           = "${var.member_base_compartment_name}"
   description    = "Base compartment for members"
+  compartment_id = "${var.tenancy_ocid}"
+  enable_delete  = false // true will cause this compartment to be deleted when running `terrafrom destroy`
+}
+
+resource "oci_identity_compartment" "project_base_compartment" {
+  name           = "${var.project_base_compartment_name}"
+  description    = "Base compartment for projects"
   compartment_id = "${var.tenancy_ocid}"
   enable_delete  = false // true will cause this compartment to be deleted when running `terrafrom destroy`
 }
@@ -74,12 +100,25 @@ resource "oci_identity_compartment" "member_compartments" {
   compartment_id = "${oci_identity_compartment.base_compartment.id}"
   enable_delete  = false // true will cause this compartment to be deleted when running `terrafrom destroy`
 }
+resource "oci_identity_compartment" "project_compartments" {
+  for_each       = toset([for project in var.projects : lookup(project, "name")])
+  name           = "${each.value}"
+  description    = "Personal compartment for ${each.value}"
+  compartment_id = "${oci_identity_compartment.project_base_compartment.id}"
+  enable_delete  = false // true will cause this compartment to be deleted when running `terrafrom destroy`
+}
 
 resource "oci_identity_tag_default" "created_by_tag_defaults" {
   for_each          = toset([for user in var.users : lookup(user, "name")])
   tag_definition_id = "${oci_identity_tag.created_by.id}"
   value             = "$${iam.principal.name} ($${iam.principal.type})"
   compartment_id    = "${oci_identity_compartment.member_compartments[element(split("|", each.value), 0)].id}"
+}
+resource "oci_identity_tag_default" "created_by_tag_defaults_on_projects" {
+  for_each          = toset([for project in var.projects : lookup(project, "name")])
+  tag_definition_id = "${oci_identity_tag.created_by.id}"
+  value             = "$${iam.principal.name} ($${iam.principal.type})"
+  compartment_id    = "${oci_identity_compartment.project_compartments[element(split("|", each.value), 0)].id}"
 }
 
 resource "oci_identity_tag_default" "owner_tag_defaults" {
@@ -88,6 +127,20 @@ resource "oci_identity_tag_default" "owner_tag_defaults" {
   value             = "${each.value}"
   compartment_id    = "${oci_identity_compartment.member_compartments[element(split("|", each.value), 0)].id}"
 }
+/*
+resource "oci_identity_tag_default" "owner_tag_defaults_on_projects" {
+  for_each          = toset([for project in var.projects : "${lookup(project, "name")}|${lookup(project, "owner")}"])
+  tag_definition_id = "${oci_identity_tag.owner.id}"
+  value             = element(split("|", each.value), 1)
+  compartment_id    = "${oci_identity_compartment.project_compartments[element(split("|", each.value), 0)].id}"
+}
+*/
+resource "oci_identity_tag_default" "owner_tag_defaults_on_projects" {
+  for_each          = toset([for project in var.projects : lookup(project, "name")])
+  tag_definition_id = "${oci_identity_tag.owner.id}"
+  value             = "${element([for project in var.projects : lookup(project, "owner") if lookup(project, "name") == each.value], 0)}"
+  compartment_id    = "${oci_identity_compartment.project_compartments[element(split("|", each.value), 0)].id}"
+}
 
 resource "oci_identity_tag_default" "fy20_org_tag_defaults" {
   for_each          = toset(flatten(local.tagsbyusers))
@@ -95,11 +148,23 @@ resource "oci_identity_tag_default" "fy20_org_tag_defaults" {
   value             = "${lookup(element([for user in var.users : lookup(user, "org") if lookup(user, "name") == element(split("|", each.value), 0)], 0), element(split("|", each.value), 1))}"
   compartment_id    = "${oci_identity_compartment.member_compartments[element(split("|", each.value), 0)].id}"
 }
+resource "oci_identity_tag_default" "fy20_org_tag_defaults_on_projects" {
+  for_each          = toset(flatten(local.tagsbyprojects))
+  tag_definition_id = "${oci_identity_tag.org_hierarchy[element(split("|", each.value), 1)].id}"
+  value             = "${lookup(element([for project in var.projects : lookup(project, "org") if lookup(project, "name") == element(split("|", each.value), 0)], 0), element(split("|", each.value), 1))}"
+  compartment_id    = "${oci_identity_compartment.project_compartments[element(split("|", each.value), 0)].id}"
+}
 
 resource "oci_identity_group" "admin_groups" {
   for_each       = toset([for user in var.users : lookup(user, "name")])
-  name           = "${var.base_compartment_name}-${each.value}_admins"
+  name           = "${var.member_base_compartment_name}-${each.value}_admins"
   description    = "Administrator group for ${each.value}'s personal compartment"
+  compartment_id = "${var.tenancy_ocid}"
+}
+resource "oci_identity_group" "admin_groups_on_projects" {
+  for_each       = toset([for project in var.projects : lookup(project, "name")])
+  name           = "${var.project_base_compartment_name}-${each.value}_admins"
+  description    = "Administrator group for ${each.value}'s project compartment"
   compartment_id = "${var.tenancy_ocid}"
 }
 
@@ -114,24 +179,28 @@ resource "oci_identity_idp_group_mapping" "admin_idp_group_mappings" {
   idp_group_name       = "oci_${oci_identity_group.admin_groups[each.key].name}"
   identity_provider_id = "${element([for provider in data.oci_identity_identity_providers.idcs_identity_provider.identity_providers[*] : provider.id if provider.name == "OracleIdentityCloudService"], 0)}"
 }
+resource "oci_identity_idp_group_mapping" "admin_idp_group_mappings_on_projects" {
+  for_each             = toset([for project in var.projects : lookup(project, "name")])
+  group_id             = "${oci_identity_group.admin_groups_on_projects[each.key].id}"
+  idp_group_name       = "oci_${oci_identity_group.admin_groups_on_projects[each.key].name}"
+  identity_provider_id = "${element([for provider in data.oci_identity_identity_providers.idcs_identity_provider.identity_providers[*] : provider.id if provider.name == "OracleIdentityCloudService"], 0)}"
+}
 
 resource "oci_identity_policy" "admin_policies" {
   count          = floor((length(var.users) - 1) / 50) + 1
-  name           = "${var.base_compartment_name}_manage_policy_${count.index}"
+  name           = "${var.member_base_compartment_name}_manage_policy_${count.index}"
   description    = "Management policy for members' personal compartments ${count.index}"
   compartment_id = "${oci_identity_compartment.base_compartment.id}"
 
   statements   = [for i in range(((count.index) * 50), min(((count.index + 1) * 50), length(var.users))) : "Allow group ${oci_identity_group.admin_groups[lookup(var.users[i], "name")].name} to manage all-resources in compartment ${oci_identity_compartment.member_compartments[lookup(var.users[i], "name")].name} where all{request.permission != 'COMPARTMENT_CREATE', request.permission != 'TAG_NAMESPACE_CREATE'}"]
 
 }
-/*
-resource "oci_identity_policy" "admin_policies" {
-  for_each       = toset([for user in var.users : lookup(user, "name")])
-  name           = "${each.value}_manage_policy"
-  description    = "Management policy for ${each.value}'s personal compartment"
-  compartment_id = "${oci_identity_compartment.base_compartment.id}"
-  statements     = [
-    "Allow group ${oci_identity_group.admin_groups[each.key].name} to manage all-resources in compartment ${oci_identity_compartment.member_compartments[each.key].name} where all{request.permission != 'COMPARTMENT_CREATE', request.permission != 'TAG_NAMESPACE_CREATE'}"
-  ]
+resource "oci_identity_policy" "admin_policies_on_projects" {
+  count          = floor((length(var.projects) - 1) / 50) + 1
+  name           = "${var.project_base_compartment_name}_manage_policy_${count.index}"
+  description    = "Management policy for projects' compartments ${count.index}"
+  compartment_id = "${oci_identity_compartment.project_base_compartment.id}"
+
+  statements   = [for i in range(((count.index) * 50), min(((count.index + 1) * 50), length(var.projects))) : "Allow group ${oci_identity_group.admin_groups_on_projects[lookup(var.projects[i], "name")].name} to manage all-resources in compartment ${oci_identity_compartment.project_compartments[lookup(var.projects[i], "name")].name} where all{request.permission != 'COMPARTMENT_CREATE', request.permission != 'TAG_NAMESPACE_CREATE'}"]
+
 }
-*/

@@ -1,0 +1,8 @@
+/*
+* Set your organization hierarchy. This information will be used for cost tracking tags and set as tag default in users' compartments.
+*/
+projects = [
+  { name = "<project1>", org = { "<your_org_level_1>" = "<tag_string>", "<your_org_level_2" = "<tag_string>", "<your_org_level_3" = "<tag_string>" } },
+
+  { name = "<project2>", org = { "<your_org_level_1>" = "<tag_string>", "<your_org_level_2" = "<tag_string>" } },
+]
